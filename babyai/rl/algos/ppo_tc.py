@@ -4,14 +4,14 @@ import torch.nn.functional as F
 
 
 from babyai.rl.algos.base_tc import BaseAlgo
-
+from babyai.utils.format import Vocabulary
 
 
 class PPOAlgo(BaseAlgo):
     """The class for the Proximal Policy Optimization algorithm
     ([Schulman et al., 2015](https://arxiv.org/abs/1707.06347))."""
 
-    def __init__(self, envs, acmodel, num_frames_per_proc=None, discount=0.99, lr=7e-4, beta1=0.9, beta2=0.999,
+    def __init__(self, envs, acmodel,model_name, num_frames_per_proc=None, discount=0.99, lr=7e-4, beta1=0.9, beta2=0.999,
                  gae_lambda=0.95,
                  entropy_coef=0.01, value_loss_coef=0.5, max_grad_norm=0.5, recurrence=4,
                  adam_eps=1e-5, clip_eps=0.2, epochs=4, batch_size=256, preprocess_obss=None,
@@ -25,6 +25,7 @@ class PPOAlgo(BaseAlgo):
         self.clip_eps = clip_eps
         self.epochs = epochs
         self.batch_size = batch_size
+        self.vocab = Vocabulary(model_name)
 
         assert self.batch_size % self.recurrence == 0
 
@@ -99,13 +100,14 @@ class PPOAlgo(BaseAlgo):
                     surr1 = ratio * sb.advantage
                     surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * sb.advantage
                     policy_loss = -torch.min(surr1, surr2).mean()
-
+                    
+                    value = torch.gather(value,0,dist.sample().unsqueeze(1)).squeeze(1)
                     value_clipped = sb.value + torch.clamp(value - sb.value, -self.clip_eps, self.clip_eps)
                     surr1 = (value - sb.returnn).pow(2)
                     surr2 = (value_clipped - sb.returnn).pow(2)
                     value_loss = torch.max(surr1, surr2).mean()
 
-                    loss = policy_loss - self.entropy_coef * entropy + self.value_loss_coef * value_loss
+                    loss = abs(policy_loss + self.entropy_coef * entropy - self.value_loss_coef * value_loss)
 
                     # Update batch values
 
@@ -121,7 +123,6 @@ class PPOAlgo(BaseAlgo):
                         exps.memory[inds + i + 1] = memory.detach()
 
                 # Update batch values
-
                 batch_entropy /= self.recurrence
                 batch_value /= self.recurrence
                 batch_policy_loss /= self.recurrence
@@ -146,7 +147,6 @@ class PPOAlgo(BaseAlgo):
                 log_losses.append(batch_loss.item())
 
         # Log some values
-
         logs["entropy"] = numpy.mean(log_entropies)
         logs["value"] = numpy.mean(log_values)
         logs["policy_loss"] = numpy.mean(log_policy_losses)

@@ -16,7 +16,7 @@ import logging
 import torch
 from babyai.arguments import ArgumentParser
 import babyai.utils as utils
-from babyai.thought_cloning import OfflineLearning, OfflineLanguageLearning
+from babyai.thought_cloning import OnlineLearning, OnlineLanguageLearning
 import pdb
 
 # Parse arguments
@@ -97,62 +97,15 @@ def main(args):
         assert len(args.multi_demos) == len(args.multi_episodes)
 
     utils.group_name = args.expr_group_name
-    import pdb
-    pdb.set_trace()
     if args.language:
-        args.model = args.model or OfflineLanguageLearning.default_model_name(args)
+        args.model = args.model or OnlineLanguageLearning.default_model_name(args)
     else:
-        args.model = args.model or OfflineLearning.default_model_name(args)
+        args.model = args.model or OnlineLearning.default_model_name(args)
     utils.configure_logging(args.model)
     logger = logging.getLogger(__name__)
 
-    rl_learn = OfflineLanguageLearning(args) if args.language else OfflineLearning(args)
+    rl_learn = OnlineLanguageLearning(args) if args.language else OnlineLearning(args)
 
-    # Define logger and Tensorboard writer
-    header = [
-        "update",
-        "frames",
-        "FPS",
-        "duration",
-        "entropy",
-        "policy_loss",
-        "sg_loss",
-        "train_accuracy",
-    ] + ["validation_accuracy"]
-    if args.multi_env is None:
-        header.extend(["validation_return", "validation_success_rate"])
-    else:
-        header.extend(["validation_return_{}".format(env) for env in args.multi_env])
-        header.extend(
-            ["validation_success_rate_{}".format(env) for env in args.multi_env]
-        )
-    writer = None
-    if args.tb:
-        from tensorboardX import SummaryWriter
-
-        writer = SummaryWriter(utils.get_log_dir(args.model))
-
-    # Define csv writer
-    csv_writer = None
-    csv_path = os.path.join(utils.get_log_dir(args.model), "log.csv")
-    first_created = not os.path.exists(csv_path)
-    # we don't buffer data going in the csv log, cause we assume
-    # that one update will take much longer that one write to the log
-    csv_writer = csv.writer(open(csv_path, "a", 1))
-    if first_created:
-        csv_writer.writerow(header)
-    logger.info("prepared csv writer")
-
-    # Get the status path
-    status_path = os.path.join(utils.get_log_dir(args.model), "status.json")
-    logger.info("read status")
-
-    # Log command, availability of CUDA, and model
-    logger.info(args)
-    logger.info("CUDA available: {}".format(torch.cuda.is_available()))
-    logger.info(rl_learn.acmodel)
-
-    rl_learn.train(rl_learn.train_demos, writer, csv_writer, status_path, header)
 
 
 if __name__ == "__main__":

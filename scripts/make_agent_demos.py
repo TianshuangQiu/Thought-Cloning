@@ -24,6 +24,7 @@ import random
 import blosc
 import torch
 import pdb
+
 import babyai.utils as utils
 
 # Parse arguments
@@ -167,7 +168,9 @@ def print_demo_lengths(demos):
 
 def generate_demos(n_episodes, valid, seed, shift=0):
     utils.seed(seed)
-
+    if(torch.cuda.is_available()):
+        device = torch.device("cuda:0")
+        print("Using GPU id {}".format(0))
     # Generate environment
     env = gym.make("BabyAI-%s-v0" % (args.env))
 
@@ -253,6 +256,8 @@ def generate_demos(n_episodes, valid, seed, shift=0):
             if reward > 0 and (
                 args.filter_steps == 0 or len(images) <= args.filter_steps
             ):
+                import pdb
+                pdb.set_trace()
                 demos.append(
                     (
                         mission,
@@ -359,6 +364,8 @@ def generate_demos(n_episodes, valid, seed, shift=0):
             and len(demos) % args.save_interval == 0
         ):
             logger.info("Saving demos...")
+            import pdb
+            pdb.set_trace()
             utils.save_demos(demos, demos_path)
             logger.info("{} demos saved".format(len(demos)))
             # print statistics for the last 100 demonstrations
@@ -367,6 +374,8 @@ def generate_demos(n_episodes, valid, seed, shift=0):
     # Save demonstrations
     logger.info("Saving demos...")
     # pdb.set_trace()
+    import pdb
+    pdb.set_trace()
     utils.save_demos(demos, demos_path)
     logger.info("{} demos saved".format(len(demos)))
     print_demo_lengths(demos[-100:])
@@ -430,6 +439,7 @@ def generate_demos_cluster():
     all_demos = []
     for demos in job_demos:
         all_demos.extend(demos)
+    
     utils.save_demos(all_demos, demos_path)
 
 

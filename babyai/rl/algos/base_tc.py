@@ -5,7 +5,9 @@ import numpy
 from babyai.rl.format import default_preprocess_obss
 from babyai.rl.utils import DictList, ParallelEnv
 from babyai.rl.utils.supervised_losses import ExtraInfoCollector
-
+import babyai.rl
+import numpy as np
+import re
 
 class BaseAlgo(ABC):
     """The base class for RL algorithms."""
@@ -107,6 +109,29 @@ class BaseAlgo(ABC):
         self.log_reshaped_return = [0] * self.num_procs
         self.log_num_frames = [0] * self.num_procs
 
+    def convert_obs(self,obss):
+        raw_instrs = []
+        max_instr_len = 0
+        preprocessed_obs = babyai.rl.DictList()
+        
+        images = np.array([obs["image"] for obs in obss])
+        images = torch.tensor(images, device='cuda:0', dtype=torch.float)
+        for obs in obss:
+            tokens = re.findall("([a-z]+)", obs["mission"].lower())
+            instr = numpy.array([self.vocab[token] for token in tokens])
+
+            raw_instrs.append(instr)
+            max_instr_len = max(len(instr), max_instr_len)
+
+        instrs = numpy.zeros((len(obss), max_instr_len))
+
+        for i, instr in enumerate(raw_instrs):
+            instrs[i, : len(instr)] = instr
+        overall_goals = torch.tensor(instrs, device='cuda:0', dtype=torch.long)
+        preprocessed_obs.image = images
+        preprocessed_obs.instr = overall_goals
+        return preprocessed_obs
+
     def collect_experiences(self):
         """Collects rollouts and computes advantages.
 
@@ -130,8 +155,8 @@ class BaseAlgo(ABC):
         """
         for i in range(self.num_frames_per_proc):
             # Do one agent-environment interaction
-
-            preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
+            preprocessed_obs = self.convert_obs(self.obs)
+            
             with torch.no_grad():
                 model_results = self.acmodel(preprocessed_obs, self.memory * self.mask.view(-1,1,1))
                 dist = model_results['dist']
@@ -157,7 +182,8 @@ class BaseAlgo(ABC):
             self.masks[i] = self.mask
             self.mask = 1 - torch.tensor(done, device=self.device, dtype=torch.float)
             self.actions[i] = action
-            self.values[i] = value
+            #self.values[i] = value
+            self.values[i] = value[0,action.item()]
             if self.reshape_reward is not None:
                 self.rewards[i] = torch.tensor([
                     self.reshape_reward(obs_, action_, reward_, done_)
@@ -188,11 +214,12 @@ class BaseAlgo(ABC):
             self.log_episode_num_frames *= self.mask
 
         # Add advantage and return to experiences
-
-        preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
+        
+        # preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
+        preprocessed_obs = self.convert_obs(self.obs)
         with torch.no_grad():
             next_value = self.acmodel(preprocessed_obs, self.memory * self.mask.view(-1,1,1))['value']
-
+        next_value = next_value[0,action.item()]
         for i in reversed(range(self.num_frames_per_proc)):
             next_mask = self.masks[i+1] if i < self.num_frames_per_proc - 1 else self.mask
             next_value = self.values[i+1] if i < self.num_frames_per_proc - 1 else next_value
@@ -204,6 +231,7 @@ class BaseAlgo(ABC):
         # Flatten the data correctly, making sure that
         # each episode's data is a continuous chunk
 
+        
         exps = DictList()
         exps.obs = [self.obss[i][j]
                     for j in range(self.num_procs)
@@ -229,7 +257,8 @@ class BaseAlgo(ABC):
 
         # Preprocess experiences
 
-        exps.obs = self.preprocess_obss(exps.obs, device=self.device)
+        #exps.obs = self.preprocess_obss(exps.obs, device=self.device)
+        exps.obs = self.convert_obs(exps.obs)
 
         # Log some values
 
