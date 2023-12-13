@@ -812,8 +812,8 @@ class OfflineLearning(object):
         #     use_double_q=True,
         # )
         self.rl_algo = CQL(
-            cql_alpha=0.0008,
-            cql_temperature=0.9,
+            cql_alpha=0.08,
+            cql_temperature=0.25,
             discount=0.9,
             target_update_period=256,
             critic_optimizer=self.optimizer,
@@ -1089,9 +1089,11 @@ class OfflineLearning(object):
                     prev_reward = reward_step
             indexes += 1
         # import pdb; pdb.set_trace()
+        torch.autograd.set_detect_anomaly(True)
 
         self.optimizer.zero_grad()
         scaler.scale(final_loss).backward()
+        # import pdb; pdb.set_trace()
 
         grad_norm = torch.nn.utils.clip_grad.clip_grad_norm_(
             self.acmodel.lower_level_policy.parameters(), 1, norm_type="inf"
@@ -1407,8 +1409,8 @@ class OfflineLanguageLearning(object):
         #     use_double_q=True,
         # )
         self.rl_algo = CQL(
-            cql_alpha=0.5,
-            cql_temperature=1.0,
+            cql_alpha=0.08,
+            cql_temperature=0.25,
             discount=0.9,
             target_update_period=256,
             critic_optimizer=self.optimizer,
