@@ -17,6 +17,7 @@ from babyai.TC_models import ThoughCloningModel
 from babyai.rl.algos.DQN import DQN
 from babyai.rl.algos.AWAC import AWAC
 from babyai.rl.algos.IQL import IQL
+from babyai.rl.algos.CQL import CQL
 from babyai.submodules import maskedNll
 import multiprocessing
 import os
@@ -810,13 +811,21 @@ class OfflineLearning(object):
         #     critic_optimizer=self.optimizer,
         #     use_double_q=True,
         # )
-        self.rl_algo = AWAC(
-            temperature=1,
-            discount=0.99,
+        self.rl_algo = CQL(
+            cql_alpha=0.0008,
+            cql_temperature=0.9,
+            discount=0.9,
             target_update_period=256,
             critic_optimizer=self.optimizer,
             use_double_q=True,
         )
+        # self.rl_algo = AWAC(
+        #     temperature=1,
+        #     discount=0.99,
+        #     target_update_period=256,
+        #     critic_optimizer=self.optimizer,
+        #     use_double_q=True,
+        # )
         # self.rl_algo = IQL(
         #     expectile=0.1,
         #     temperature=1,
@@ -1031,6 +1040,14 @@ class OfflineLearning(object):
                     next_qa = target_results["qa"]
                     qa = prev_results["qa"]
 
+                    # CQL DQN
+                    metrics = self.rl_algo.update(
+                        qa,
+                        prev_action,
+                        torch.from_numpy(prev_reward.astype("float16")).to(self.device),
+                        next_qa,
+                        torch.from_numpy(prev_done.astype("bool")).to(self.device),
+                    )
                     # metrics = self.rl_algo.update(
                     #     qa,
                     #     value,
@@ -1041,14 +1058,14 @@ class OfflineLearning(object):
                     #     next_value,
                     #     torch.from_numpy(prev_done.astype("bool")).to(self.device),
                     # )
-                    metrics = self.rl_algo.update(
-                        qa,
-                        prev_action,
-                        torch.from_numpy(prev_reward.astype("float16")).to(self.device),
-                        next_qa,
-                        torch.from_numpy(prev_done.astype("bool")).to(self.device),
-                        dist,
-                    )
+                    # metrics = self.rl_algo.update(
+                    #     qa,
+                    #     prev_action,
+                    #     torch.from_numpy(prev_reward.astype("float16")).to(self.device),
+                    #     next_qa,
+                    #     torch.from_numpy(prev_done.astype("bool")).to(self.device),
+                    #     dist,
+                    # )
                     # metrics = self.rl_algo.update(
                     #     qa,
                     #     prev_action,
@@ -1058,11 +1075,11 @@ class OfflineLearning(object):
                     #     dist,
                     # )
                     critic_l = metrics["critic_loss"]
-                    actor_l = metrics["actor_loss"]
+                    # actor_l = metrics["actor_loss"]
                     # value_loss = metrics["value_loss"]
 
                     final_loss += critic_l
-                    final_loss += actor_l
+                    # final_loss += actor_l
                     # final_loss += value_loss
 
                     log.append(metrics)
@@ -1071,9 +1088,11 @@ class OfflineLearning(object):
                     prev_done = done_rl
                     prev_reward = reward_step
             indexes += 1
+        # import pdb; pdb.set_trace()
 
         self.optimizer.zero_grad()
         scaler.scale(final_loss).backward()
+
         grad_norm = torch.nn.utils.clip_grad.clip_grad_norm_(
             self.acmodel.lower_level_policy.parameters(), 1, norm_type="inf"
         )
@@ -1380,9 +1399,17 @@ class OfflineLanguageLearning(object):
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.rl_algo = AWAC(
-            0.1,
-            discount=0.99,
+        # self.rl_algo = AWAC(
+        #     0.1,
+        #     discount=0.99,
+        #     target_update_period=256,
+        #     critic_optimizer=self.optimizer,
+        #     use_double_q=True,
+        # )
+        self.rl_algo = CQL(
+            cql_alpha=0.5,
+            cql_temperature=1.0,
+            discount=0.9,
             target_update_period=256,
             critic_optimizer=self.optimizer,
             use_double_q=True,
@@ -1578,6 +1605,10 @@ class OfflineLanguageLearning(object):
         total_frames = len(indexes) * self.args.recurrence
 
         scaler = torch.cuda.amp.GradScaler()
+        prev_results = None
+        prev_done = None
+        prev_reward = None
+        prev_action = None
         for _ in range(self.args.recurrence):
             obs = obss[indexes]
             next_obs = obss[indexes]
@@ -1599,25 +1630,48 @@ class OfflineLanguageLearning(object):
                         memory * mask_step,
                         instr_embedding=instr_embedding[episode_ids[indexes]],
                     )
+                if prev_results is None:
+                    prev_results = model_results
+                    prev_done = done_rl
+                    prev_reward = reward_step
+                    prev_action = action_step
+                    continue
+                else:
+                    # pdb.set_trace()
+                    dist = prev_results["dist"]
+                    value = prev_results["value"]
+                    next_value = target_next["value"]
+                    next_qa = target_next["qa"]
+                    qa = prev_results["qa"]
 
                 # pdb.set_trace()
-                dist = model_results["dist"]
-                (critic_l, actor_l), rst = self.rl_algo.update(
-                    model_results["value"],
-                    action_step,
-                    torch.from_numpy(reward_step.astype("float16")).to(self.device),
-                    target_next["value"],
-                    torch.from_numpy(done_rl.astype("bool")).to(self.device),
-                    dist,
-                )
+                # awac
+                # (critic_l, actor_l), rst = self.rl_algo.update(
+                #     model_results["value"],
+                #     action_step,
+                #     torch.from_numpy(reward_step.astype("float16")).to(self.device),
+                #     target_next["value"],
+                #     torch.from_numpy(done_rl.astype("bool")).to(self.device),
+                #     dist,
+                # )
+                # cql
+                metrics = self.rl_algo.update(
+                        qa,
+                        action_step,
+                        torch.from_numpy(reward_step.astype("float16")).to(self.device),
+                        next_qa,
+                        torch.from_numpy(done_rl.astype("bool")).to(self.device),
+                    )
+
                 entropy = dist.entropy().mean()
                 final_entropy += entropy
-                final_policy_loss += critic_l
-                final_policy_loss += actor_l
+                # final_policy_loss += critic_l
+                # final_policy_loss += actor_l
+                final_policy_loss += metrics["critic_loss"]
                 final_sg_loss += maskedNll(
                     model_results["logProbs"], preprocessed_obs.subgoal
                 )
-                wandb.log(rst)
+                # wandb.log(rst)
             indexes += 1
 
         final_loss = final_policy_loss - final_entropy * 0.01 + final_sg_loss

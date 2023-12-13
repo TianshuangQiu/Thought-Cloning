@@ -150,7 +150,7 @@ class DQN(nn.Module):
         # TODO(student): paste in your code from HW3
 
         # TODO(student): update the critic, and the target if needed
-        loss, critic_stats = self.update_critic(
+        critic_loss, metrics = self.update_critic(
             qa_values,
             action,
             reward,
@@ -158,5 +158,7 @@ class DQN(nn.Module):
             done,
             double_next_qa_values,
         )
-        # ENDTODO
-        return loss, critic_stats
+
+        metrics["critic_loss"] = critic_loss
+
+        return metrics
