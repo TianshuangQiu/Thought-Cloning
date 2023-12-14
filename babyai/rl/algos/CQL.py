@@ -39,49 +39,28 @@ class CQL(DQN):
             done,
             double_next_qa_values,
         )
+        qa_values = qa_values.float()
 
         # TODO(student): modify the loss to implement CQL
-        qa_values = variables['qa_values'] 
-        q_values = variables['q_values']    
+        # qa_values = variables['qa_values'] 
+        # q_values = variables['q_values']    
+        q_values = torch.gather(qa_values, 1, action.unsqueeze(1)).squeeze(1).float()
         # print('q', q_values)
         # print('qa', qa_values)
-        log_sum_exp_q_values = torch.logsumexp(qa_values/self.cql_temperature, dim=1)
+        log_sum_exp_q_values = torch.logsumexp(qa_values/self.cql_temperature, dim=1).float()
         # print('sum_exp', log_sum_exp_q_values)
 
 
         cql_reg = log_sum_exp_q_values*self.cql_temperature - q_values
-        # print('cql', cql_reg)
+
+        # # print('cql', cql_reg)
+        # cql_reg.to(torch.float32)
         cql_reg = self.cql_alpha * cql_reg.mean()
         # print('cql alpha', cql_reg)
+        cql_reg = cql_reg.float()
+        # import pdb; pdb.set_trace()
 
         loss += cql_reg
 
         return loss, metrics, variables
     
-    def update(
-        self,
-        qa_values: torch.Tensor,
-        action: torch.Tensor,
-        reward: torch.Tensor,
-        next_qa_values: torch.Tensor,
-        done: torch.Tensor,
-        double_next_qa_values=None,
-    ) -> dict:
-        """
-        Update the DQN agent, including both the critic and target.
-        """
-        # TODO(student): paste in your code from HW3
-
-        # TODO(student): update the critic, and the target if needed
-        critic_loss, metrics = self.update_critic(
-            qa_values,
-            action,
-            reward,
-            next_qa_values,
-            done,
-            double_next_qa_values,
-        )
-
-        metrics["critic_loss"] = critic_loss
-
-        return metrics
