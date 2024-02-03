@@ -209,7 +209,7 @@ class ImitationLearning(object):
             self.acmodel.to(self.device)
             logger.info("send model to {}".format(self.device))
 
-        wandb.init(project="Thought-Cloning", name=args.wandb_id)
+        wandb.init(project="Thought-Cloning-Project-ODL", name=args.wandb_id)
         wandb.watch(self.acmodel, log_freq=100)
 
     @staticmethod
@@ -679,7 +679,7 @@ class OfflineLearning(object):
         args,
     ):
         self.args = args
-        wandb.init(project="Thought-Cloning", name=args.wandb_id)
+        wandb.init(project="Thought-Cloning-Project-ODL", name=args.wandb_id)
 
         utils.seed(self.args.seed)
         self.val_seed = self.args.val_seed
@@ -1267,7 +1267,7 @@ class OfflineLanguageLearning(object):
         args,
     ):
         self.args = args
-        wandb.init(project="Thought-Cloning", name=args.wandb_id)
+        wandb.init(project="Thought-Cloning-Project-ODL", name=args.wandb_id)
 
         utils.seed(self.args.seed)
         self.val_seed = self.args.val_seed
@@ -1371,22 +1371,48 @@ class OfflineLanguageLearning(object):
 
         self.acmodel.train()
 
-        self.optimizer = torch.optim.Adam(
-            self.acmodel.lower_level_policy.parameters(),
-            self.args.lr,
-            eps=self.args.optim_eps,
-        )
+        if self.args.lower_only:
+            self.optimizer = torch.optim.Adam(
+                list(self.acmodel.lower_level_policy.critic.parameters())
+                + list(self.acmodel.lower_level_policy.value_critic.parameters()),
+                self.args.lr,
+                eps=self.args.optim_eps,
+            )
+            num_param = sum(
+                p.numel() for p in self.acmodel.lower_level_policy.parameters()
+            )
+            print(f"Optimizing LOWER ONLY {num_param} params")
+        else:
+            self.optimizer = torch.optim.Adam(
+                self.acmodel.parameters(), self.args.lr, eps=self.args.optim_eps
+            )
+            num_param = sum(p.numel() for p in self.acmodel.parameters())
+            print(f"Optimizing {num_param} params")
         self.teacher_forcing_ratio = 1
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        # self.rl_algo = DQN(
+        #     discount=0.9,
+        #     target_update_period=256,
+        #     critic_optimizer=self.optimizer,
+        #     use_double_q=True,
+        # )
         self.rl_algo = AWAC(
-            0.1,
+            temperature=1,
             discount=0.99,
             target_update_period=256,
             critic_optimizer=self.optimizer,
             use_double_q=True,
         )
+        # self.rl_algo = IQL(
+        #     expectile=0.1,
+        #     temperature=1,
+        #     discount=0.99,
+        #     target_update_period=256,
+        #     critic_optimizer=self.optimizer,
+        #     use_double_q=False,
+        # )
         self.step = 0
         self.target = ThoughCloningModel(
             self.obss_preprocessor.obs_space,
@@ -1439,30 +1465,26 @@ class OfflineLanguageLearning(object):
             self.acmodel.eval()
 
         # Log dictionary
-        log = {"entropy": [], "policy_loss": [], "final_sg_loss": []}
+        log = {}
 
         start_time = time.time()
         frames = 0
         for batch_index in tqdm(range(len(indices) // batch_size)):
             if self.step % self.args.target_update_period == 0:
                 print("Updating target")
-                self.target.load_state_dict(self.acmodel.state_dict())
+                self.target.load_state_dict(self.acmodel.state_dict(), strict=False)
+            # if self.step == 0:
+            #     self.acmodel = copy.deepcopy(self.target)
             batch = [demos[i] for i in indices[offset : offset + batch_size]]
             frames += sum([len(demo[3]) for demo in batch])
 
-            try:
-                _log = self.run_epoch_recurrence_one_batch(
-                    batch, is_training=is_training
-                )
-                log["entropy"].append(_log["entropy"])
-                log["policy_loss"].append(_log["policy_loss"])
-                log["final_sg_loss"].append(_log["sg_loss"])
-                self.step += 1
-            except Exception as e:
-                print(e)
-                gc.collect()
-                torch.cuda.empty_cache()
-                raise
+            # try:
+            self.run_epoch_recurrence_one_batch(batch, is_training=is_training)
+            self.step += 1
+            # except Exception as e:
+            #     print(e)
+            #     gc.collect()
+            #     torch.cuda.empty_cache()
 
             offset += batch_size
 
@@ -1504,21 +1526,6 @@ class OfflineLanguageLearning(object):
             flat_batch[:, 2],
             flat_batch[:, 3],
         )
-        next_obss = obss[1:].copy()
-        next_obss = np.concatenate(
-            [
-                next_obss,
-                [
-                    {
-                        "image": np.zeros_like(obss[0]["image"]),
-                        "direction": 0,
-                        "mission": "task complete",
-                        "subgoal": "none",
-                        "is_new_sg": False,
-                    }
-                ],
-            ]
-        )
         action_true = torch.tensor(
             [action for action in action_true], device=self.device, dtype=torch.long
         )
@@ -1537,16 +1544,14 @@ class OfflineLanguageLearning(object):
             preprocessed_first_obs.instr
         )
 
-        log = {}
+        log = []
         # Loop terminates when every observation in the flat_batch has been handled
         while True:
             # taking observations and done located at inds
             obs = obss[inds]
-            next_obs = next_obss[inds]
             done_step = done[inds]
             reward_step = rewards[inds]
             preprocessed_obs = self.obss_preprocessor(obs, device=self.device)
-            preprocessed_next_obs = self.obss_preprocessor(next_obs, device=self.device)
             with torch.no_grad():
                 # taking the memory till len(inds), as demos beyond that have already finished
                 new_memory = self.acmodel.train_forward(
@@ -1570,19 +1575,18 @@ class OfflineLanguageLearning(object):
 
         # Here, actual backprop upto args.recurrence happens
         final_loss = 0
-        final_entropy, final_policy_loss, final_value_loss, final_sg_loss = 0, 0, 0, 0
 
         indexes = self.starting_indexes(num_frames)
         memory = memories[indexes]
-        accuracy = 0
-        total_frames = len(indexes) * self.args.recurrence
 
         scaler = torch.cuda.amp.GradScaler()
+        prev_results = None
+        prev_done = None
+        prev_reward = None
+        prev_action = None
         for _ in range(self.args.recurrence):
             obs = obss[indexes]
-            next_obs = obss[indexes]
             preprocessed_obs = self.obss_preprocessor(obs, device=self.device)
-            preprocessed_next_obs = self.obss_preprocessor(next_obs, device=self.device)
             action_step = action_true[indexes]
             reward_step = rewards[indexes]
             mask_step = mask[indexes]
@@ -1592,44 +1596,79 @@ class OfflineLanguageLearning(object):
                     preprocessed_obs,
                     memory * mask_step,
                     instr_embedding=instr_embedding[episode_ids[indexes]],
+                    lower_only=self.args.lower_only,
                 )
                 with torch.no_grad():
-                    target_next = self.target.rl_forward(
-                        preprocessed_next_obs,
+                    target_results = self.target.rl_forward(
+                        preprocessed_obs,
                         memory * mask_step,
                         instr_embedding=instr_embedding[episode_ids[indexes]],
+                        lower_only=self.args.lower_only,
                     )
+                if prev_results is None:
+                    prev_results = model_results
+                    prev_done = done_rl
+                    prev_reward = reward_step
+                    prev_action = action_step
+                    continue
+                else:
+                    logProbs = prev_results["logProbs"]
+                    dist = prev_results["dist"]
+                    value = prev_results["value"]
+                    next_value = target_results["value"]
+                    next_qa = target_results["qa"]
+                    qa = prev_results["qa"]
 
-                # pdb.set_trace()
-                dist = model_results["dist"]
-                (critic_l, actor_l), rst = self.rl_algo.update(
-                    model_results["value"],
-                    action_step,
-                    torch.from_numpy(reward_step.astype("float16")).to(self.device),
-                    target_next["value"],
-                    torch.from_numpy(done_rl.astype("bool")).to(self.device),
-                    dist,
-                )
-                entropy = dist.entropy().mean()
-                final_entropy += entropy
-                final_policy_loss += critic_l
-                final_policy_loss += actor_l
-                final_sg_loss += maskedNll(
-                    model_results["logProbs"], preprocessed_obs.subgoal
-                )
-                wandb.log(rst)
+                    # metrics = self.rl_algo.update(
+                    #     qa,
+                    #     value,
+                    #     prev_action,
+                    #     dist,
+                    #     torch.from_numpy(prev_reward.astype("float16")).to(self.device),
+                    #     next_qa,
+                    #     next_value,
+                    #     torch.from_numpy(prev_done.astype("bool")).to(self.device),
+                    # )
+                    metrics = self.rl_algo.update(
+                        qa,
+                        prev_action,
+                        torch.from_numpy(prev_reward.astype("float16")).to(self.device),
+                        next_qa,
+                        torch.from_numpy(prev_done.astype("bool")).to(self.device),
+                        dist,
+                    )
+                    # metrics = self.rl_algo.update(
+                    #     qa,
+                    #     prev_action,
+                    #     torch.from_numpy(prev_reward.astype("float16")).to(self.device),
+                    #     next_qa,
+                    #     torch.from_numpy(prev_done.astype("bool")).to(self.device),
+                    #     dist,
+                    # )
+                    sg_loss = maskedNll(logProbs, preprocessed_obs.subgoal)
+                    critic_l = metrics["critic_loss"]
+                    actor_l = metrics["actor_loss"]
+                    # value_loss = metrics["value_loss"]
+
+                    final_loss += critic_l
+                    final_loss += actor_l
+                    # final_loss += value_loss
+                    final_loss += sg_loss
+
+                    metrics["sg_loss"] = sg_loss
+                    log.append(metrics)
+                    wandb.log(metrics)
+                    prev_results = model_results
+                    prev_done = done_rl
+                    prev_reward = reward_step
             indexes += 1
 
-        final_loss = final_policy_loss - final_entropy * 0.01 + final_sg_loss
-        log["policy_loss"] = final_policy_loss
-        log["entropy"] = final_entropy
-        log["sg_loss"] = final_sg_loss
-        wandb.log(log)
         self.optimizer.zero_grad()
         scaler.scale(final_loss).backward()
         grad_norm = torch.nn.utils.clip_grad.clip_grad_norm_(
-            self.acmodel.parameters(), 1, norm_type=2
+            self.acmodel.lower_level_policy.parameters(), 1, norm_type="inf"
         )
+        wandb.log({"Grad Norm": grad_norm})
         # final_loss.backward()
         scaler.step(self.optimizer)
         # self.optimizer.step()
@@ -1661,7 +1700,14 @@ class OfflineLanguageLearning(object):
             else self.args.multi_env
         ):
             logs += [
-                TC_batch_evaluate(agent, env_name, self.val_seed, episodes, True, False)
+                TC_batch_evaluate(
+                    agent,
+                    env_name,
+                    self.val_seed,
+                    episodes,
+                    True,
+                    False,
+                )
             ]
             self.val_seed += episodes
         episode_vis = np.random.choice(len(logs[0]["visualization_per_episode"]))
