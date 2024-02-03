@@ -17,6 +17,7 @@ from babyai.TC_models import ThoughCloningModel
 from babyai.rl.algos.DQN import DQN
 from babyai.rl.algos.AWAC import AWAC
 from babyai.rl.algos.IQL import IQL
+from babyai.rl.algos.CQL import CQL
 from babyai.submodules import maskedNll
 import multiprocessing
 import os
